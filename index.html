@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="kk"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Кейіпкерлер аквариумы</title>
+<style>
+:root{color-scheme:dark;--bg1:#06304a;--bg2:#021524;--fg:#eaf6ff;--card:#0d2f47;--ac:#2ec4b6;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{background:linear-gradient(#0a4a6e,#021524);color:var(--fg);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden}
+#board{position:fixed;inset:0}canvas{display:block;width:100%;height:100%}
+.tag{position:fixed;left:12px;top:calc(env(safe-area-inset-top,0px) + 10px);background:#021524b3;padding:8px 12px;border-radius:12px;font-size:14px;max-width:80vw;word-break:break-all}
+.tag b{color:var(--ac)}
+#tools{position:fixed;right:12px;top:calc(env(safe-area-inset-top,0px) + 10px);display:flex;gap:8px}
+button,.btn{background:var(--ac);color:#02222a;border:0;border-radius:12px;padding:12px 18px;font-size:16px;font-weight:600;cursor:pointer}
+button.s{background:#021524b3;color:var(--fg);padding:8px 12px;font-size:14px}
+button:disabled{opacity:.5}
+#up{display:none;height:100%;overflow:auto;padding:20px 16px}
+.card{max-width:440px;margin:0 auto;background:var(--card);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px}
+h1{font-size:22px;margin:0}input[type=text]{width:100%;padding:12px;border-radius:10px;border:1px solid #3b6a88;background:#021524;color:var(--fg);font-size:16px}
+#pv{width:100%;max-height:260px;object-fit:contain;background:repeating-conic-gradient(#1a4560 0 25%,#123a52 0 50%) 0 0/20px 20px;border-radius:12px;display:none}
+#st{font-size:14px;min-height:20px}label{font-size:14px}
+p.h{font-size:13px;opacity:.8;margin:0}
+</style></head><body>
+<div id="board"><canvas id="cv"></canvas>
+<div class="tag" id="tag"></div>
+<div id="tools"><button class="s" id="clr" style="display:none">Тазарту</button></div></div>
+<div id="up"><div class="card">
+<h1>Кейіпкеріңді аквариумға жібер 🐠</h1>
+<p class="h">ChatGPT-де жасаған суретті таңда. Ең жақсысы — ақ түсті фонда.</p>
+<input type="file" id="f" accept="image/*">
+<input type="text" id="nm" maxlength="20" placeholder="Атың немесе лақап атың">
+<label><input type="checkbox" id="rb" checked> Фонды автоматты түрде алып тастау</label>
+<img id="pv" alt="">
+<button id="go" disabled>Жіберу</button>
+<div id="st"></div>
+<p class="h">Бір оқушы — бір кейіпкер. Қайта жіберсең, ескісі ауысады.</p>
+</div></div>
+<script type="module">
+import{initializeApp}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import{getFirestore,doc,setDoc,deleteDoc,getDocs,collection,onSnapshot}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+/* === 1) Firebase баптауларын осында қой (README қараңыз) === */
+const firebaseConfig = {
+  apiKey: "AIzaSyAJPqT3itgfuV4YyzYQAHardYOTjYT0crk",
+  authDomain: "fishies-1d60f.firebaseapp.com",
+  projectId: "fishies-1d60f",
+  storageBucket: "fishies-1d60f.firebasestorage.app",
+  messagingSenderId: "89833871292",
+  appId: "1:89833871292:web:19e8ec12cbfd4ed11d7db9",
+  measurementId: "G-8QT1MSS9WF"
+};
+const $=s=>document.getElementById(s);
+const isUp=()=>location.hash.replace('#','')==='upload';
+let db,admin=location.hash==='#teacher';
+const room=(new URLSearchParams(location.search).get('room')||'class1').replace(/[^\w-]/g,'').slice(0,30)||'class1';
+let uid=localStorage.getItem('aq_uid');if(!uid){uid='u'+Math.random().toString(36).slice(2)+Date.now().toString(36);localStorage.setItem('aq_uid',uid)}
+const cref=()=>collection(db,'rooms',room,'chars');
+function view(){const u=isUp();$('up').style.display=u?'block':'none';$('board').style.display=u?'none':'block';
+ $('tag').innerHTML='Қосылу беті: <b>'+(location.href.split('#')[0])+'#upload</b>';}
+addEventListener('hashchange',view);view();
+
+/* ---------- image processing ---------- */
+let blobData=null,srcImg=null;
+function process(){
+ if(!srcImg)return;
+ let w=srcImg.naturalWidth,h=srcImg.naturalHeight,m=256,k=Math.min(1,m/Math.max(w,h));
+ w=Math.max(1,Math.round(w*k));h=Math.max(1,Math.round(h*k));
+ const c=document.createElement('canvas');c.width=w;c.height=h;
+ const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(srcImg,0,0,w,h);
+ if($('rb').checked){
+  const d=x.getImageData(0,0,w,h),p=d.data,seen=new Uint8Array(w*h);
+  const cs=[[0,0],[w-1,0],[0,h-1],[w-1,h-1]].map(([a,b])=>{const i=(b*w+a)*4;return[p[i],p[i+1],p[i+2],p[i+3]]});
+  const T=60,near=i=>{if(p[i+3]<10)return true;return cs.some(q=>Math.abs(p[i]-q[0])+Math.abs(p[i+1]-q[1])+Math.abs(p[i+2]-q[2])<T*1.5)};
+  const st=[];for(let i=0;i<w;i++){st.push(i,(h-1)*w+i)}for(let j=0;j<h;j++){st.push(j*w,j*w+w-1)}
+  while(st.length){const n=st.pop();if(seen[n])continue;seen[n]=1;if(!near(n*4))continue;p[n*4+3]=0;
+   const xx=n%w,yy=(n/w)|0;if(xx>0)st.push(n-1);if(xx<w-1)st.push(n+1);if(yy>0)st.push(n-w);if(yy<h-1)st.push(n+w);}
+  x.putImageData(d,0,0);
+ }
+ let url=c.toDataURL('image/png');
+ if(url.length>200000){const c2=document.createElement('canvas');c2.width=Math.round(w*.7);c2.height=Math.round(h*.7);c2.getContext('2d').drawImage(c,0,0,c2.width,c2.height);url=c2.toDataURL('image/png')}
+ blobData=url;$('pv').src=url;$('pv').style.display='block';$('go').disabled=!db;
+}
+$('f').onchange=e=>{const f=e.target.files[0];if(!f)return;const i=new Image();i.onload=()=>{srcImg=i;process()};i.src=URL.createObjectURL(f)};
+$('rb').onchange=process;
+$('go').onclick=async()=>{
+ const n=($('nm').value||'').trim()||'Қонақ';$('go').disabled=true;$('st').textContent='Жіберілуде…';
+ try{await setDoc(doc(db,'rooms',room,'chars',uid),{name:n,img:blobData,t:Date.now()});
+  $('st').textContent='Дайын! Аквариумға қара 🎉'}
+ catch(e){$('st').textContent='Қате: '+(e.message||e.code);$('go').disabled=false}
+};
+
+/* ---------- aquarium ---------- */
+const cv=$('cv'),cx=cv.getContext('2d');let W=0,H=0;
+function rs(){const r=devicePixelRatio||1;W=innerWidth;H=innerHeight;cv.width=W*r;cv.height=H*r;cx.setTransform(r,0,0,r,0,0)}
+addEventListener('resize',rs);rs();
+const fish=new Map(),parts=[],bub=[];
+for(let i=0;i<30;i++)bub.push({x:Math.random(),y:Math.random(),r:2+Math.random()*5,s:.03+Math.random()*.05});
+function spawn(id,d,fx){
+ const old=fish.get(id);const im=new Image();im.src=d.img;
+ const z=.7+Math.random()*.6;
+ const f=old||{x:W*(.1+Math.random()*.8),y:H*(.2+Math.random()*.6),vx:(Math.random()<.5?-1:1)*(25+Math.random()*45),vy:(Math.random()-.5)*14,z,ph:Math.random()*6,hop:0,nx:3+Math.random()*6,born:performance.now()};
+ f.im=im;f.name=d.name;f.id=id;fish.set(id,f);
+ if(fx){f.born=performance.now();burst(f.x,f.y)}
+}
+function burst(x,y){for(let i=0;i<30;i++){const a=Math.random()*6.28,s=40+Math.random()*160;parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,l:1,c:`hsl(${160+Math.random()*80},90%,75%)`})}}
+let last=performance.now();
+function frame(t){
+ const dt=Math.min(.05,(t-last)/1000);last=t;cx.clearRect(0,0,W,H);
+ const g=cx.createRadialGradient(W*.5,-H*.1,10,W*.5,0,H*1.1);g.addColorStop(0,'#2aa6c933');g.addColorStop(1,'#0000');cx.fillStyle=g;cx.fillRect(0,0,W,H);
+ cx.fillStyle='#ffffff10';for(let i=0;i<4;i++){cx.beginPath();const bx=W*(.15+i*.25)+Math.sin(t/4000+i)*40;cx.moveTo(bx,0);cx.lineTo(bx+90,0);cx.lineTo(bx+260,H);cx.lineTo(bx+60,H);cx.fill()}
+ cx.fillStyle='#ffffff2a';for(const b of bub){b.y-=b.s*dt;if(b.y<0)b.y=1;cx.beginPath();cx.arc(b.x*W+Math.sin(t/900+b.r)*6,b.y*H,b.r,0,6.28);cx.fill()}
+ [...fish.values()].sort((a,b)=>a.z-b.z).forEach(f=>{
+  f.x+=f.vx*dt*f.z;f.y+=f.vy*dt;f.nx-=dt;
+  if(f.nx<0){f.nx=3+Math.random()*6;f.vy=(Math.random()-.5)*20;if(Math.random()<.35)f.hop=1;if(Math.random()<.2)f.vx*=-1}
+  const s=Math.max(110,Math.min(190,Math.min(W,H)*.2))*f.z;
+  if(f.x<s/2){f.x=s/2;f.vx=Math.abs(f.vx)}if(f.x>W-s/2){f.x=W-s/2;f.vx=-Math.abs(f.vx)}
+  if(f.y<s/2){f.y=s/2;f.vy=Math.abs(f.vy)}if(f.y>H-s/2-20){f.y=H-s/2-20;f.vy=-Math.abs(f.vy)}
+  if(f.hop>0)f.hop-=dt*1.4;
+  const age=Math.min(1,(t-f.born)/900),pop=age<1?1+(1-age)*1.2:1;
+  const sw=Math.sin(t/500+f.ph),hp=f.hop>0?Math.sin(f.hop*3.14)*40:0;
+  const im=f.im;if(!im.complete||!im.naturalWidth)return;
+  const r=im.naturalWidth/im.naturalHeight,dw=(r>=1?s:s*r)*pop,dh=(r>=1?s/r:s)*pop;
+  f.dw=dw;f.dh=dh;f.cy=f.y-hp;
+  cx.save();cx.translate(f.x,f.y+Math.sin(t/700+f.ph)*6-hp);cx.rotate(sw*.07+(f.hop>0?f.hop*.5:0));
+  cx.scale((f.vx<0?-1:1)*(1+sw*.03),1-sw*.03);cx.shadowColor='#7fe9ff';cx.shadowBlur=18;
+  cx.drawImage(im,-dw/2,-dh/2,dw,dh);cx.restore();
+  cx.fillStyle='#eaf6ff';cx.font='600 14px system-ui';cx.textAlign='center';cx.globalAlpha=.85;cx.fillText(f.name||'',f.x,f.y+dh/2+16);cx.globalAlpha=1;
+ });
+ for(let i=parts.length-1;i>=0;i--){const p=parts[i];p.x+=p.vx*dt;p.y+=p.vy*dt;p.l-=dt*1.1;if(p.l<=0){parts.splice(i,1);continue}cx.globalAlpha=p.l;cx.fillStyle=p.c;cx.beginPath();cx.arc(p.x,p.y,4*p.l+1,0,6.28);cx.fill()}cx.globalAlpha=1;
+ if(!fish.size){cx.fillStyle='#eaf6ffaa';cx.font='600 22px system-ui';cx.textAlign='center';cx.fillText('Аквариум бос. Алғашқы кейіпкерді күтеміз…',W/2,H/2)}
+ requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
+
+cv.addEventListener('click',async e=>{
+ if(!admin)return;const r=cv.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;
+ const hit=[...fish.values()].reverse().find(f=>f.dw&&Math.abs(x-f.x)<f.dw/2&&Math.abs(y-f.cy)<f.dh/2);
+ if(hit&&confirm('«'+hit.name+'» кейіпкерін өшіру керек пе?'))try{await deleteDoc(doc(db,'rooms',room,'chars',hit.id))}catch(_){}
+});
+$('clr').onclick=async()=>{if(!confirm('Барлық кейіпкерлерді өшіру керек пе?'))return;
+ const s=await getDocs(cref());for(const d of s.docs)await deleteDoc(d.ref)};
+
+/* ---------- start ---------- */
+try{
+ db=getFirestore(initializeApp(firebaseConfig));
+}catch(e){db=null}
+if(!db||firebaseConfig.apiKey==='ЖАЗ'){$('tag').textContent='Firebase баптауы жоқ: firebaseConfig толтырыңыз';$('st').textContent='Firebase баптауы жоқ'}
+else{
+ if(admin)$('clr').style.display='block';
+ if(srcImg)$('go').disabled=false;
+ let first=true;
+ onSnapshot(cref(),s=>{
+  s.docChanges().forEach(c=>{const d=c.doc.data();
+   if(c.type==='removed')fish.delete(c.doc.id);else if(d&&d.img)spawn(c.doc.id,d,!first)});
+  first=false;
+ },e=>{$('tag').textContent='Қате: '+(e.message||e.code)});
+}
+</script></body></html>
